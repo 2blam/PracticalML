@@ -1,0 +1,198 @@
+```{r setup, include=FALSE}
+#cache globally
+knitr::opts_chunk$set(cache=TRUE)
+knitr::opts_chunk$set(message=FALSE)
+knitr::opts_chunk$set(warning=FALSE)
+```
+---
+title: "Practical Machine Learning Project"
+output:
+  html_document:
+    keep_md: yes
+---
+###Prepare environment
+
+Setting up the working directory and load the  _caret_ and _doSNOW_library
+* Due to the recent update, it is necessary to manually load _knitr_ library so as to prevent error.
+```{r}
+library(knitr)
+library(caret)
+library(doSNOW) #enable parallel process in Windows
+setwd("c:/Users/User/Desktop/practical_machine_learning")
+```
+
+###Load the datasets
+```{r}
+#check if the file exists in the current directory, if not download the files
+if (!file.exists("pml-training.csv")){
+  trainCSVURL = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(url=trainCSVURL, destfile="pml-training.csv", method="auto")
+}
+
+if (!file.exists("pml-testing.csv")){
+  testCSVURL = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv" 
+  download.file(url=testCSVURL, destfile="pml-testing.csv", method="auto")  
+}
+
+#read csv files
+trainingData = read.csv("pml-training.csv", na.strings="NA", header=TRUE)
+testing = read.csv("pml-testing.csv", na.strings="NA", header=TRUE)
+
+```
+### Partition the data
+Partition the data: 70% for training and 30% for validation.
+```{r}
+inTrain <- createDataPartition(trainingData$classe, p=0.70, list=FALSE)
+training <- trainingData[inTrain,]
+validation <- trainingData[-inTrain,]
+```
+### Preprocess Data
+I defined a preprocess function to do the followings:
+
+1. Remove columns with NA value
+2. Remove non-numeric columns, except _classe_
+3. Remove the index column (first column)
+4. Remove the num_window, raw_timestamp_part_1, data$raw_timestamp_part_2 columns
+
+```{r}
+preprocess = function(data){
+  #check if classe columns exists
+  append = FALSE
+  if ("classe" %in% colnames(data)){
+    append = TRUE
+    classeCol = data$classe
+  }
+  #get the column index without any NA 
+  idx = which(colSums(is.na(data)) == 0)
+  
+  data = data[, idx]
+  #get the column index which is numeric
+  idx = which(sapply(data, is.numeric) == TRUE)
+  data = data[, idx]
+  
+  #remove the first column
+  data = data[, -1]
+  
+  #remove num_window, raw_timestamp_part_1, raw_timestamp_part_2, columns
+  data$num_window = NULL
+  data$raw_timestamp_part_1 = NULL
+  data$raw_timestamp_part_2 = NULL
+  
+  #append the classe back, if it is neceesary
+  if (append == TRUE){
+    data$classe = classeCol
+  }
+  
+  data
+}
+
+#preprocess data
+training = preprocess(training)
+validation = preprocess(validation)
+testing = preprocess(testing)
+dim(training)
+dim(validation)
+dim(testing) #testing does not have classe column, but with a new column named problem_id
+```
+
+### Create 3 Models for Comparsion
+
+I created 3 models for performance comparsion.
+These 3 models are :
+1. Random Forest (rf), 
+2. Stochastic Gradient Boosting (gbm), and 
+3. Linear Discriminant Analysis (lda).
+
+To shorten the processing time, I enabled the parallel process by using _doSNOW_ library which supports Windows.
+```{r}
+cl <- makeCluster(4) #enable 4 cores processing
+registerDoSNOW(cl)
+set.seed(109)
+if (!file.exists("modelRF.RData")){
+  modelRF <- train(training$classe~.,data=training, method="rf")
+  save(modelRF, file="modelRF.RData")
+}else{
+  load("modelRF.RData")
+}
+
+if (!file.exists("modelGBM.RData")){
+  modelGBM <- train(training$classe~.,data=training, method="gbm")
+  save(modelGBM, file="modelGBM.RData")
+}else{
+  load("modelGBM.RData")
+}
+
+if (!file.exists("modelLDA.RData")){
+  modelLDA <- train(training$classe~.,data=training, method="lda")
+  save(modelLDA, file="modelLDA.RData")
+}else{
+  load("modelLDA.RData")
+}
+
+
+#get the accuracy by using the validation data
+#rf 
+accRF<- predict(modelRF, validation)
+print(confusionMatrix(accRF, validation$classe))
+#gbm
+accGBM<- predict(modelGBM, validation)
+print(confusionMatrix(accGBM, validation$classe))
+#lda
+accLDA<- predict(modelLDA, validation)
+print(confusionMatrix(accLDA, validation$classe))
+```
+
+### Result
+The performance of 3 models are summarized as follows:
+1. Random Forest: 99.8%
+2. Stochastic Gradient Boosting: 97.1%
+3. Linear Discriminant Analysis: 70.3%
+
+Random forest was outperform the others and it is the best model for this dataset. To avoid over-fitting, I further applied 10-fold cross validation, repeat 5 times, to train the random forest model.
+
+
+```{r}
+#Do 5 repeats of 10-Fold CV for the data
+if (!file.exists("modelRF_CV.RData")){
+  set.seed(119)
+  trainCtrl <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+  modelRF_CV <- train(classe ~ ., method="rf",  data=training, trControl = trainCtrl)
+  save(modelRF_CV, file="modelRF_CV.RData")
+}else{
+  load("modelRF_CV.RData")
+}
+
+```
+
+
+
+```{r}
+#check classification rate
+predV = predict(modelRF_CV, validation)
+print(confusionMatrix(predV, validation$classe))
+
+```
+
+After cross-validation, the accuracy of the random forest model was 99.8%. The accurarcy is the same as the previous random forest model.
+
+### Variable Importance
+The most important variable is _"roll_belt"_
+```{r}
+varImportance = varImp(modelRF_CV$finalModel)
+maxIdx = order(varImportance$Overall, decreasing=TRUE)[1]
+print(rownames(varImportance)[maxIdx])
+```
+### Testing Results
+By using the random forest, with cross validation, model, the prediction results of the testing data are shown as follows.
+```{r}
+#check the testing data
+predT = predict(modelRF_CV, testing)
+predT
+
+#save the result for submission
+for (i in 1:20){
+  fn = paste(i, ".txt")
+  write(as.character(predT[1]), file=fn)
+}
+```
+
