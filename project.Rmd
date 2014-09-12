@@ -192,7 +192,7 @@ predT
 #save the result for submission
 for (i in 1:20){
   fn = paste(i, ".txt")
-  write(as.character(predT[1]), file=fn)
+  write(as.character(predT[i]), file=fn)
 }
 ```
 
